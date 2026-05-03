@@ -11,6 +11,7 @@ permissions:
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
+    environment: PROD
 
     steps:
       - name: Checkout Repository
