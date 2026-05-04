@@ -1,0 +1,18 @@
+# Python Virtual Environment
+venv/
+env/
+.venv/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Generierte temporäre Dateien
+*.svg
+organigramm
+temp_organigram
+
+# VS Code / OS settings
+.vscode/
+.DS_Store

@@ -1,123 +1,88 @@
+"""
+generate_chart.py
+Holt die Daten aus ChurchTools, berechnet das Layout und erstellt das SVG.
+"""
+
 import os
-import sys
 import logging
 import requests
-from typing import List, Dict, Any
-import graphviz
+from typing import Any
 
-# --- CONFIGURATION & SECURITY ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-BASE_URL = os.getenv('CT_BASE_URL', '').rstrip('/')
-API_TOKEN = os.getenv('CT_API_TOKEN')
-WIKI_CATEGORY_ID = os.getenv('CT_WIKI_CATEGORY_ID')
+def fetch_ct_groups() -> list[dict[str, Any]]:
+    """
+    Holt alle Gruppen aus ChurchTools via API.
+    """
+    base_url = os.getenv("CT_BASE_URL", "").rstrip("/")
+    api_token = os.getenv("CT_API_TOKEN", "")
 
-if not all([BASE_URL, API_TOKEN, WIKI_CATEGORY_ID]):
-    logger.error("Security/Config Error: Missing required environment variables (URL, Token, Wiki-ID).")
-    sys.exit(1)
+    if not base_url or not api_token:
+        logger.error("Fehlende Variablen CT_BASE_URL oder CT_API_TOKEN für die Gruppenabfrage.")
+        return []
 
-# Group type mapping
-# You can use the exact Name (e.g. 'Kleingruppen') OR the raw ID (e.g. '1', '2') as the key.
-TYPE_COLORS = {
-    'Kleingruppen': '#0284c7', 'Dienste': '#65a30d', 'Maßnahmen': '#d97706',
-    'Merkmale': '#0d9488', 'Verteiler': '#b45309', 'Datenschutz-Einwilligungen': '#64748b',
-    'Gemeindeorgane': '#9333ea', 'Dienstbereiche': '#0f766e', 'Veranstaltungen': '#4d7c0f',
-    'default': '#f1f5f9'
-}
+    auth_header = api_token if api_token.startswith("Login ") else f"Login {api_token}"
+    headers = {
+        "Authorization": auth_header,
+        "Accept": "application/json"
+    }
 
-def get_session() -> requests.Session:
-    session = requests.Session()
-    session.headers.update({'Authorization': f'Login {API_TOKEN}'})
-    return session
+    url = f"{base_url}/api/groups"
 
-def fetch_meta_data(session: requests.Session) -> Dict[str, str]:
-    """Fetches group type names to dynamically map IDs to names. Fails gracefully if endpoint is missing."""
     try:
-        # ChurchTools introduced this CRUD API in v3.96
-        res = session.get(f"{BASE_URL}/api/group-types", timeout=10)
-        if res.status_code == 200:
-            return {str(t['id']): t.get('name', t.get('nameTranslated', f"Type {t['id']}")) for t in res.json().get('data', [])}
-        else:
-            logger.warning(f"Meta-data endpoint returned status {res.status_code}. Falling back to raw IDs.")
-    except Exception as e:
-        logger.warning(f"Failed to fetch group-types metadata: {e}. Falling back to raw IDs.")
-
-    return {} # Return empty dict, do not crash.
-
-def fetch_groups(session: requests.Session) -> List[Dict[str, Any]]:
-    try:
-        res = session.get(f"{BASE_URL}/api/groups", timeout=15)
+        logger.info("Lade Gruppen aus ChurchTools herunter...")
+        res = requests.get(url, headers=headers, timeout=15)
         res.raise_for_status()
-        return res.json().get('data', [])
+
+        groups = res.json().get("data", [])
+        logger.info(f"{len(groups)} Gruppen erfolgreich geladen.")
+        return groups
+
     except Exception as e:
-        logger.error(f"Failed to load groups: {e}")
-        sys.exit(1)
+        logger.error(f"Fehler beim Abrufen der Gruppen-API: {e}")
+        return []
 
-def build_svg(groups: List[Dict[str, Any]], type_map: Dict[str, str]) -> str:
-    dot = graphviz.Digraph(format='svg')
-    dot.attr(bgcolor='#ffffff', rankdir='TB', splines='ortho')
-    dot.attr('node', fontname='Arial', fontsize='11', style='filled,rounded')
+def create_organigram_svg(output_path: str) -> bool:
+    """
+    Generiert das Organigramm als SVG-Datei.
 
-    found_types = set()
+    Args:
+        output_path (str): Pfad, unter dem das SVG gespeichert werden soll.
 
-    for g in groups:
-        gid = str(g['id'])
-        name = g['name']
-        pid = str(g.get('parentId')) if g.get('parentId') else None
+    Returns:
+        bool: True wenn erfolgreich erstellt, False bei einem Fehler.
+    """
+    logger.info("Starte Generierung des Organigramms...")
 
-        # Determine group type ID
-        tid = str(g.get('information', {}).get('groupTypeId', g.get('groupTypeId', '')))
-
-        # Try to get the mapped name, fallback to the raw ID if metadata fetch failed
-        t_name = type_map.get(tid, tid)
-        found_types.add(t_name)
-
-        # Determine color (checks if Name OR ID is in TYPE_COLORS)
-        color = TYPE_COLORS.get(t_name, TYPE_COLORS.get(tid, TYPE_COLORS['default']))
-
-        url = f"{BASE_URL}/?q=churchdb#GroupView/view/{gid}"
-
-        shape = 'hexagon' if not pid or pid == "None" else 'rect'
-        dot.node(gid, name, shape=shape, fillcolor=color, color='#1e293b', URL=url)
-
-        if pid and pid != "None":
-            dot.edge(pid, gid, color='#94a3b8')
-
-    # Log available types for the user so they can adjust TYPE_COLORS easily
-    logger.info(f"Group types found in your data (Use these as keys in TYPE_COLORS): {', '.join(sorted(found_types))}")
-
-    # Build Legend based on actual matched colors
-    legend = '<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">'
-    legend += '<TR><TD COLSPAN="2" BGCOLOR="#cbd5e1"><B>Legend</B></TD></TR>'
-    for n, c in TYPE_COLORS.items():
-        if n == 'default': continue
-        legend += f'<TR><TD BGCOLOR="{c}">  </TD><TD ALIGN="LEFT">{n}</TD></TR>'
-    legend += '</TABLE>>'
-    dot.node('legend', label=legend, shape='none')
-
-    return dot.render('temp_organigram', cleanup=True)
-
-def upload_file(session: requests.Session, path: str):
-    url = f"{BASE_URL}/api/files"
-    payload = {'domainType': 'wikicategory', 'domainId': WIKI_CATEGORY_ID}
     try:
-        with open(path, 'rb') as f:
-            files = {'files[]': ('organigramm.svg', f, 'image/svg+xml')}
-            res = session.post(url, data=payload, files=files, timeout=30)
-            res.raise_for_status()
-            logger.info("Successfully uploaded the organizational chart to ChurchTools.")
+        # 1. Lade echte Daten aus CT
+        groups = fetch_ct_groups()
+        if not groups:
+            logger.warning("Generierung abgebrochen: Keine Gruppen gefunden.")
+            return False
+
+        # 2. TODO: Berechne hier die Baumstruktur anhand von Parent/Child Beziehungen
+        # z.B. tree = build_tree(groups)
+
+        # 3. Dummy-SVG (zeigt nun die echte Anzahl der Gruppen an!)
+        dummy_svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="600" height="150">
+    <rect width="100%" height="100%" fill="#f0f0f0" rx="10" />
+    <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#333">
+        Organigramm bereit! ({len(groups)} Gruppen aus ChurchTools geladen)
+    </text>
+</svg>"""
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(dummy_svg)
+
+        logger.info(f"Organigramm erfolgreich unter '{output_path}' gespeichert.")
+        return True
+
     except Exception as e:
-        logger.error(f"Upload failed: {e}")
-        sys.exit(1)
+        logger.error(f"Fehler bei der SVG-Generierung: {e}")
+        return False
 
+# Lokaler Test
 if __name__ == "__main__":
-    s = get_session()
-    t_map = fetch_meta_data(s)
-    g_data = fetch_groups(s)
-
-    file_path = build_svg(g_data, t_map)
-    upload_file(s, file_path)
-
-    if os.path.exists(file_path):
-        os.remove(file_path)
+    logging.basicConfig(level=logging.DEBUG)
+    create_organigram_svg("test_organigram.svg")
