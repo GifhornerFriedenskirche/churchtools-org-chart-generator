@@ -1,72 +1,101 @@
-# ChurchTools Org Chart Generator
+# ChurchTools Org-Chart Generator 📊
 
-This project automates the creation of an organizational chart (Org Chart) based on the group structures within a ChurchTools instance. It fetches the live group hierarchy via the ChurchTools REST API, generates a visual SVG chart, and automatically uploads it to a specified ChurchTools Wiki page.
+An enterprise-grade Python application that automatically fetches organizational structures from the ChurchTools API, generates beautifully formatted SVG and PNG hierarchy charts, and seamlessly uploads them directly to a specified ChurchTools Wiki page.
+## ✨ Key Features
 
-## 🚀 Features
+* **Smart Canvas Layout Engine:** Automatically calculates compact, overlapping-free hierarchy trees. Safely handles complex multiple-parent groups, isolated nodes, and disconnected subtrees.
+* **Intelligent Two-Column Legend:** Dynamically counts and displays unique Group Types and Group Statuses (Active, Draft, Finished, Archived), smartly excluding duplicates from the total counts.
+* **Auto-Scaling Protection:** Features dynamic mathematical image resizing. Automatically scales down massive organizational PNG structures to bypass ChurchTools' strict 33-Megapixel API upload restriction.
+* **Zero-Clutter Wiki Uploads:** Features a built-in pre-flight cleanup sequence. It locates the target Wiki page by title, identifies existing legacy graphs, performs a hard delete, and uploads the fresh asset-ensuring your Wiki history remains completely uncluttered.
+* **Strict Type Safety:** Fully audited with Microsoft Pylance to guarantee enterprise-grade stability and type safety.
 
-* **Automated Data Retrieval:** Fetches live group data directly from the ChurchTools API.
-* **Seamless Wiki Integration:** Automatically resolves the target Wiki page GUID based on the category ID and page title.
-* **Stateless API Authentication:** Uses secure Personal Login Tokens (`Authorization: Login <token>`), completely bypassing legacy CSRF and session-cookie issues.
-* **Modular Architecture:** Strict Separation of Concerns between orchestration, generation, and uploading for high maintainability.
-* **Robust Error Handling:** Comprehensive `try/except` blocks, HTTP status validation, and strict type hinting (Pylance/MyPy compliant).
+## 🏗️ Architecture
 
-## 📁 Architecture
+The application is cleanly divided into three distinct modules (Separation of Concerns):
+1. `main.py`: The orchestrator. Reads environment variables, handles global logging, and links generation with uploading.
+2. `generate_chart.py`: The rendering engine. Fetches raw data from the ChurchTools API, builds the mathematical layout, and renders the SVG/PNG files.
+3. `upload_chart.py`: The API liaison. Looks up Wiki page identifiers, safely deletes historical charts, and executes multipart file uploads.
 
-The project is split into three main, highly-cohesive modules:
+## ⚙️ Prerequisites
+* Python 3.8+
+* CairoSVG Dependencies (Crucial for PNG export):
+  * Linux/macOS: Usually works out of the box after `pip install`. You may need `libcairo2-dev`.
+  * Windows: CairoSVG requires GTK-3 to be installed and added to your system PATH. Follow the official [GTK for Windows installation guide](https://www.gtk.org/docs/installations/windows/) if PNG generation fails.
 
-1. `main.py` - **The Orchestrator:** Manages the overall execution flow, triggering the generation and handling the subsequent upload.
-2. `generate_chart.py` - **The Engine:** Connects to the `/api/groups` endpoint, fetches the raw hierarchical data, calculates the layout, and renders the `temp_organigram.svg`.
-3. `upload_chart.py` - **The Uploader:** Handles API authentication, dynamically resolves the Wiki page identifier via `/api/wiki/categories/{id}/pages`, and safely pushes the SVG into the ChurchTools file system.
-
-## 🛠️ Prerequisites
-
-* **Python 3.9+**
-* Python packages: `requests`
-
-Install the required dependencies via pip:
+## 🚀 Installation
+1. Clone the repository:
 ```bash
-pip install requests
+  git clone https://github.com/your-org/churchtools-org-chart-generator.git
+  cd churchtools-org-chart-generator
 ```
-(Note: It is highly recommended to use a virtual environment `venv`.)
+2. Create and activate a virtual environment:
+```bash
+  python -m venv venv
+  # On Windows:
+  .\venv\Scripts\activate
+  # On macOS/Linux:
+  source venv/bin/activate
+```
+3. Install required Python packages:
+```bash
+pip install requests cairosvg
+```
+## 🛠️ Configuration
 
-## ⚙️ Configuration
+The generator is entirely configured via Environment Variables, making it perfect for CI/CD pipelines, Docker, or CRON jobs.
 
-The application is configured entirely via Environment Variables to prevent sensitive tokens from being hardcoded into the source code.
-Set the following variables before running the script:
+| Environment Variable | Required | Default | Description |
+| :--- | :---: | :--- | :--- |
+| `CT_BASE_URL` | **Yes** | *None* | Your ChurchTools instance URL (e.g., `https://yourchurch.church.tools`). |
+| `CT_API_TOKEN` | **Yes** | *None* | A valid ChurchTools Login Token with API access. |
+| `CT_WIKI_CATEGORY_ID` | **Yes** | *None* | The integer ID of the target Wiki Category (e.g., `23`). |
+| `CT_WIKI_PAGE_TITLE` | **Yes** | *None* | The literal text title of the destination Wiki page (e.g., `Organisation`). |
+| `CT_FILE_NAME` | No | `temp_organigram` | The base name for the generated files (without extension). |
+| `CT_GENERATE_PNG` | No | `false` | Set to `true` to generate and upload a fallback `.png` image. |
+| `CT_SPLIT_DEPTH` | No | `2` | Determines at which hierarchy depth large branches are split into detailed sub-views to keep the main chart readable. |
+| `CT_ALLOWED_STATUS_IDS`| No | *All* | Comma-separated list of status IDs to include (e.g., `1,2` for Active and Draft). |
+| `CT_DEBUG` | No | `false` | Set to `true` to enable verbose debug logging. |
 
-Variable,Description,Example
-`CT_BASE_URL`,The base URL of your ChurchTools instance.,`https://yourchurch.church.tools`
-`CT_API_TOKEN`,Your personal ChurchTools API Login Token.,`abc123def456...`
-`CT_WIKI_CATEGORY_ID`,The ID of the Wiki category where the page lives.,`23`
-`CT_WIKI_PAGE_TITLE`,The exact title of the target Wiki page.,`Organigramm`
-`CT_DEBUG`,(Optional) Set to true or 1 to enable verbose logging.,`true`
+## 💻 Usage
 
-Getting your `CT_API_TOKEN`
-  1. Log into ChurchTools.
-  2. Click on your profile picture (top right) -> Profile Settings.
-  3. Go to Security or Login.
-  4. Generate a Personal Login Token.
+Once your environment variables are set, simply run the main orchestrator:
 
-## 🏃‍♂️ Usage
-``` Windows (PowerShell)
-$env:CT_BASE_URL="[https://yourchurch.church.tools](https://yourchurch.church.tools)"
-$env:CT_API_TOKEN="YOUR_TOKEN"
-$env:CT_WIKI_CATEGORY_ID="23"
-$env:CT_WIKI_PAGE_TITLE="Organigramm"
+```bash
+python main.py
+```
+
+### Example (Linux/macOS)
+```bash
+export CT_BASE_URL="[https://mychurch.church.tools](https://mychurch.church.tools)"
+export CT_API_TOKEN="your_secure_token_here"
+export CT_WIKI_CATEGORY_ID="23"
+export CT_WIKI_PAGE_TITLE="Organigramm"
+export CT_GENERATE_PNG="true"
+export CT_ALLOWED_STATUS_IDS="1,2"
 
 python main.py
 ```
 
-``` Linux / macOS (Bash)
-export CT_BASE_URL="[https://yourchurch.church.tools](https://yourchurch.church.tools)"
-export CT_API_TOKEN="YOUR_TOKEN"
-export CT_WIKI_CATEGORY_ID="23"
-export CT_WIKI_PAGE_TITLE="Organigramm"
+### Example (Windows PowerShell)
+```powershell
+$env:CT_BASE_URL="[https://mychurch.church.tools](https://mychurch.church.tools)"
+$env:CT_API_TOKEN="your_secure_token_here"
+$env:CT_WIKI_CATEGORY_ID="23"
+$env:CT_WIKI_PAGE_TITLE="Organigramm"
+$env:CT_GENERATE_PNG="true"
+$env:CT_ALLOWED_STATUS_IDS="1,2"
 
-python3 main.py
+python main.py
 ```
 
-## 📝 Important Notes
-* **Temporary Files:** The script generates a `temp_organigram.svg` during execution. Make sure to add `*.svg` to your `.gitignore` to avoid accidentally committing generated charts to version control.
+## 🐛 Troubleshooting
 
-* **Wiki Display:** The file is attached directly to the Wiki page's underlying data object. Depending on your ChurchTools frontend, you might need to embed the file into the Wiki text manually once using the `![Chart](url)` Markdown syntax. Subsequent uploads will automatically overwrite the file and update the image.
+* **Error: `PNG generation skipped: 'cairosvg' library is missing.`**
+    Ensure `cairosvg` is installed (`pip install cairosvg`). On Windows, ensure you have installed the underlying GTK3 libraries, as Python cannot compile the Cairo graphics engine natively.
+* **Upload Skipped / Page Not Found:**
+    Double-check your `CT_WIKI_CATEGORY_ID` and ensure the `CT_WIKI_PAGE_TITLE` matches the exact string inside ChurchTools (case-sensitive).
+* **PNG looks blurry or upload fails:**
+    If the chart exceeds 33 Megapixels, the application will auto-scale the PNG down to ensure the ChurchTools API accepts it. The SVG will remain in infinite resolution.
+
+## 📄 License
+This project is licensed under the MIT License.

@@ -1,57 +1,66 @@
 """
 main.py
-Startpunkt der Anwendung. Steuert die Generierung und den anschließenden Upload.
+Main execution entry point for the ChurchTools Org-Chart Generator.
+Orchestrates generation and uploading.
 """
 
 import os
-import sys
+import time
 import logging
-from generate_chart import create_organigram_svg
-from upload_chart import ChurchToolsWikiUploader
+from generate_chart import create_organigram
+from upload_chart import upload_to_churchtools
 
-# --- Logging Setup ---
-DEBUG_MODE = os.getenv("CT_DEBUG", "false").lower() in ("true", "1", "yes")
+# --- Setup Global Logging ---
 logging.basicConfig(
-    level=logging.DEBUG if DEBUG_MODE else logging.INFO,
-    format="%(levelname)s: %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
-TEMP_SVG_FILE = "temp_organigram.svg"
-
-def main() -> None:
-    logger.info("=== ChurchTools Organigramm Generator gestartet ===")
-
-    # 1. Organigramm generieren
-    generation_success = create_organigram_svg(TEMP_SVG_FILE)
-
-    if not generation_success:
-        logger.critical("Abbruch: Organigramm konnte nicht generiert werden.")
-        sys.exit(1)
-
-    # 2. Upload nach ChurchTools
-    try:
-        uploader = ChurchToolsWikiUploader()
-
-        identifier = uploader.get_page_identifier()
-        if not identifier:
-            logger.critical("Abbruch: Zielseite in ChurchTools nicht gefunden.")
-            sys.exit(1)
-
-        upload_success = uploader.upload_file(TEMP_SVG_FILE, identifier)
-
-        if not upload_success:
-            logger.critical("Abbruch: Fehler beim Hochladen der Datei.")
-            sys.exit(1)
-
-    except ValueError as ve:
-        logger.critical(f"Konfigurationsfehler: {ve}")
-        sys.exit(1)
-    except Exception as e:
-        logger.critical(f"Unerwarteter Fehler im Upload-Prozess: {e}")
-        sys.exit(1)
-
-    logger.info("=== Prozess erfolgreich abgeschlossen ===")
+if os.getenv("CT_DEBUG", "false").lower() in ("true", "1", "yes"):
+    logger.setLevel(logging.DEBUG)
 
 if __name__ == "__main__":
-    main()
+    start_time = time.time()
+    logger.info("=== Starting ChurchTools Org-Chart Generator ===")
+
+    # Credentials and Configuration from Environment
+    CT_BASE_URL = os.getenv("CT_BASE_URL", "")
+    CT_API_TOKEN = os.getenv("CT_API_TOKEN", "")
+    CT_WIKI_CATEGORY_ID = os.getenv("CT_WIKI_CATEGORY_ID", "")
+    CT_WIKI_PAGE_TITLE = os.getenv("CT_WIKI_PAGE_TITLE", "")
+
+    # Configurable base filename (defaults to "temp_organigram")
+    FILE_BASENAME = os.getenv("CT_FILE_NAME", "temp_organigram")
+
+    if not CT_BASE_URL or not CT_API_TOKEN:
+        logger.error("❌ Critical Error: CT_BASE_URL or CT_API_TOKEN is missing in environment variables.")
+        exit(1)
+
+    # Phase 1: Generate Files
+    svg_file_path = f"{FILE_BASENAME}.svg"
+    png_file_path = f"{FILE_BASENAME}.png"
+
+    success = create_organigram(CT_BASE_URL, CT_API_TOKEN, svg_file_path)
+
+    # Phase 2: Upload Files (If generation was successful)
+    if success:
+        if CT_WIKI_CATEGORY_ID and CT_WIKI_PAGE_TITLE:
+            try:
+                wiki_cat_id = int(CT_WIKI_CATEGORY_ID)
+
+                # Upload SVG
+                upload_to_churchtools(svg_file_path, wiki_cat_id, CT_WIKI_PAGE_TITLE, CT_API_TOKEN, CT_BASE_URL)
+
+                # Upload PNG if generated (controlled by CT_GENERATE_PNG in generate_chart)
+                if os.path.exists(png_file_path):
+                    upload_to_churchtools(png_file_path, wiki_cat_id, CT_WIKI_PAGE_TITLE, CT_API_TOKEN, CT_BASE_URL)
+
+            except ValueError:
+                logger.error("❌ CT_WIKI_CATEGORY_ID must be a valid integer.")
+        else:
+            logger.info("ℹ️ Upload skipped: CT_WIKI_CATEGORY_ID or CT_WIKI_PAGE_TITLE not set.")
+
+    duration = time.time() - start_time
+    logger.info(f"=== Process completed successfully in {duration:.2f} seconds ===")

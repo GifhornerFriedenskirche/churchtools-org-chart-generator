@@ -1,45 +1,59 @@
-name: Update ChurchTools Org Chart
+name: Update ChurchTools Org-Chart
 
 on:
   schedule:
-    # Runs automatically at 03:00 UTC on the 1st day of every month
+    # Runs at 03:00 on day 1 of the month.
     - cron: '0 3 1 * *'
-  workflow_dispatch:
-    # Allows you to manually trigger the workflow from the GitHub Actions UI
+  workflow_dispatch: # Allows manual triggering via the GitHub UI
+  push:
+    branches:
+      - main
+    paths:
+      - '**.py' # Runs the action when python code is updated on main
 
 jobs:
   generate-and-upload:
-    name: Generate and Upload SVG
+    name: Generate & Upload Org-Chart
     runs-on: ubuntu-latest
 
-    # Correct key-value syntax for job-level environment variables
-    env:
-      ENVIRONMENT: PROD
+    # Ensures GitHub loads secrets and variables from the "PROD" environment
+    environment: PROD
 
     steps:
-      - name: 📥 Checkout Repository
+      - name: 📥 Checkout repository
         uses: actions/checkout@v6
 
-      - name: 🐍 Setup Python Environment
+      - name: 🐍 Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.14' # Using 3.14 for maximum stability and performance
-          cache: 'pip'           # Caches dependencies to significantly speed up future runs
+          python-version: '3.14'
+          cache: 'pip'
 
-      - name: 📦 Install Dependencies
+      - name: 📦 Install system dependencies (for CairoSVG)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2 libcairo2-dev libpango1.0-dev
+
+      - name: 🛠️ Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install requests cairosvg
 
-      - name: 🚀 Execute Script (Generate & Upload)
+      - name: 🚀 Run Org-Chart Generator
         env:
-          # Securely mapping GitHub Secrets to the environment variables
-          # expected by our Python application.
-          CT_BASE_URL: ${{ secrets.CT_BASE_URL }}
+          # --- Secrets (Configured in the PROD environment) ---
           CT_API_TOKEN: ${{ secrets.CT_API_TOKEN }}
-          CT_WIKI_CATEGORY_ID: ${{ secrets.CT_WIKI_CATEGORY_ID }}
-          CT_WIKI_PAGE_TITLE: ${{ secrets.CT_WIKI_PAGE_TITLE }}
+          CT_BASE_URL: ${{ secrets.CT_BASE_URL }}
 
-          # Force debug mode off in the production runner
-          CT_DEBUG: "false"
-        run: python main.py
+          # --- Variables (Configured in the PROD environment) ---
+          CT_WIKI_CATEGORY_ID: ${{ vars.CT_WIKI_CATEGORY_ID }}
+          CT_WIKI_PAGE_TITLE: ${{ vars.CT_WIKI_PAGE_TITLE }}
+
+          # Optional variables with defaults
+          CT_FILE_NAME: ${{ vars.CT_FILE_NAME || 'temp_organigram' }}
+          CT_GENERATE_PNG: ${{ vars.CT_GENERATE_PNG || 'true' }}
+          CT_SPLIT_DEPTH: ${{ vars.CT_SPLIT_DEPTH || '2' }}
+          CT_ALLOWED_STATUS_IDS: ${{ vars.CT_ALLOWED_STATUS_IDS || '' }}
+          CT_DEBUG: ${{ vars.CT_DEBUG || 'false' }}
+        run: |
+          python main.py

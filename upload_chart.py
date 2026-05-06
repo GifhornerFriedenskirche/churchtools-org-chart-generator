@@ -1,81 +1,101 @@
 """
 upload_chart.py
-Klasse für den sicheren Upload von Dateien an eine ChurchTools Wiki-Seite.
+Module for handling clean uploads to the ChurchTools Wiki.
+Includes automatic lookup of the Page Identifier via Page Title.
 """
 
 import os
+import mimetypes
 import logging
 import requests
-from typing import Optional
+from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
-class ChurchToolsWikiUploader:
-    def __init__(self) -> None:
-        self.base_url = os.getenv("CT_BASE_URL", "").rstrip("/")
-        self.api_token = os.getenv("CT_API_TOKEN", "")
-        self.category_id = os.getenv("CT_WIKI_CATEGORY_ID", "")
-        self.page_title = os.getenv("CT_WIKI_PAGE_TITLE", "Organigramm")
-
-        self._validate_env_vars()
-
-        auth_header = self.api_token if self.api_token.startswith("Login ") else f"Login {self.api_token}"
-
-        # Statische Header statt Session, um Session-Cookies und CSRF-Probleme zu vermeiden
-        self.headers = {
-            "Authorization": auth_header,
-            "Accept": "application/json"
-        }
-
-    def _validate_env_vars(self) -> None:
-        """Prüft, ob alle benötigten Umgebungsvariablen vorhanden sind."""
-        missing: list[str] = []
-
-        if not self.base_url: missing.append("CT_BASE_URL")
-        if not self.api_token: missing.append("CT_API_TOKEN")
-        if not self.category_id: missing.append("CT_WIKI_CATEGORY_ID")
-
-        if missing:
-            raise ValueError(f"Fehlende Umgebungsvariablen: {', '.join(missing)}")
-
-    def get_page_identifier(self) -> Optional[str]:
-        """Holt die GUID der Wiki-Seite anhand des Titels."""
-        url = f"{self.base_url}/api/wiki/categories/{self.category_id}/pages"
-        logger.debug(f"Hole Wiki-Seiten von: {url}")
-
-        try:
-            res = requests.get(url, headers=self.headers, timeout=15)
-            res.raise_for_status()
-
-            for page in res.json().get("data", []):
-                if page.get("title") == self.page_title:
+def _get_page_identifier_by_title(base_url: str, category_id: int, page_title: str, headers: Dict[str, str]) -> Optional[str]:
+    """Looks up the technical identifier of a Wiki page based on its title."""
+    url = f"{base_url.rstrip('/')}/api/wiki/categories/{category_id}/pages"
+    try:
+        res = requests.get(url, headers=headers, timeout=15)
+        if res.ok:
+            pages = res.json().get("data", [])
+            for page in pages:
+                if page.get("title") == page_title:
                     return page.get("identifier")
-
-            logger.error(f"Seite '{self.page_title}' in Kategorie {self.category_id} nicht gefunden.")
+            logger.error(f"❌ Wiki page with title '{page_title}' not found in category {category_id}.")
             return None
-        except Exception as e:
-            logger.error(f"Fehler beim Abrufen der Wiki-Seiten: {e}")
+        else:
+            logger.error(f"❌ Error fetching Wiki pages: HTTP {res.status_code}")
             return None
+    except Exception as e:
+        logger.error(f"⚠️ API connection error during Wiki lookup: {e}")
+        return None
 
-    def upload_file(self, file_path: str, identifier: str) -> bool:
-        """Lädt die Datei hoch."""
-        if not os.path.exists(file_path):
-            logger.error(f"Datei nicht gefunden: {file_path}")
-            return False
+def upload_to_churchtools(file_path: str, wiki_category_id: int, page_title: str, api_token: str, base_url: str) -> bool:
+    """Uploads a file to a ChurchTools Wiki page (including cleanup of old versions)."""
+    auth_header = api_token if api_token.startswith("Login ") else f"Login {api_token}"
 
-        domain_type = f"wiki_{self.category_id}"
-        upload_url = f"{self.base_url}/api/files/{domain_type}/{identifier}"
+    # Explicitly type the dictionaries to satisfy Pylance
+    json_headers: Dict[str, str] = {"Authorization": auth_header, "Accept": "application/json"}
 
-        try:
-            with open(file_path, "rb") as f:
-                files = {"files[]": (os.path.basename(file_path), f, "image/svg+xml")}
-                logger.info(f"Lade '{file_path}' in ChurchTools hoch...")
+    # 1. Look up the page identifier
+    logger.info(f"🔍 Looking up Wiki page '{page_title}'...")
+    page_identifier = _get_page_identifier_by_title(base_url, wiki_category_id, page_title, json_headers)
 
-                res = requests.post(upload_url, headers=self.headers, files=files, timeout=30)
+    if not page_identifier:
+        return False
+
+    domain_type = f"wiki_{wiki_category_id}"
+    domain_identifier = page_identifier
+    filename = os.path.basename(file_path)
+
+    # --- PHASE 1: CLEANUP ---
+    get_files_url = f"{base_url.rstrip('/')}/api/files/{domain_type}/{domain_identifier}"
+    try:
+        logger.info(f"🔍 Checking for existing file '{filename}' in Wiki...")
+        res_get = requests.get(get_files_url, headers=json_headers, timeout=15)
+
+        if res_get.ok:
+            for f in res_get.json().get("data", []):
+                if f.get("name") == filename:
+                    file_id = f.get("id")
+                    logger.info(f"🗑️ Old version found (ID: {file_id}). Deleting...")
+                    res_del = requests.delete(f"{base_url.rstrip('/')}/api/files/{file_id}", headers=json_headers, timeout=15)
+                    if res_del.ok:
+                        logger.info("✅ Old version successfully removed.")
+                    else:
+                        logger.warning(f"⚠️ Failed to delete old version (HTTP {res_del.status_code}).")
+        else:
+             logger.debug(f"Could not retrieve file list (HTTP {res_get.status_code}). Skipping cleanup.")
+
+    except Exception as e:
+        logger.warning(f"⚠️ Error during cleanup phase: {e}")
+
+    # --- PHASE 2: UPLOAD ---
+    upload_url = f"{base_url.rstrip('/')}/api/files/{domain_type}/{domain_identifier}"
+
+    # Explicitly type the upload headers
+    upload_headers: Dict[str, str] = {"Authorization": auth_header}
+
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if not mime_type:
+        mime_type = "image/png" if file_path.lower().endswith(".png") else "image/svg+xml"
+
+    try:
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        logger.info(f"⬆️ Uploading new version of '{filename}' (Size: {file_size_mb:.2f} MB)...")
+
+        with open(file_path, "rb") as f:
+            files_payload = {"files[]": (filename, f, mime_type)}
+            res = requests.post(upload_url, headers=upload_headers, files=files_payload, timeout=30)
+
+            if not res.ok:
+                logger.error(f"❌ Upload failed for {filename}! HTTP {res.status_code}: {res.text}")
                 res.raise_for_status()
 
-                logger.info("🎉 Upload erfolgreich!")
-                return True
-        except Exception as e:
-            logger.error(f"Upload fehlgeschlagen: {e}")
-            return False
+            logger.info(f"🎉 '{filename}' successfully uploaded.")
+            return True
+
+    except Exception as e:
+        logger.error(f"⚠️ Error uploading {filename}: {e}")
+        return False
